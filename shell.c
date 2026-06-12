@@ -8,13 +8,16 @@
 #include <string.h>
 #include <signal.h>
 
-/* ─── globals ─────────────────────────────────────────────── */
-char prompt[256]    = "hello";   /* feature 1  */
-int  last_status    = 0;         /* feature 2  */
-char last_cmd[1024] = "";        /* features 4,5 */
+/* ────────────────── globals ────────────────── */
+char prompt[256]    = "hello";   /* feature 1 - מה מודפס לפני כל פקודה */
+int  last_status    = 0;         /* feature 2 - קוד היציאה של הפקודה האחרונה */
+char last_cmd[1024] = "";        /* features 4,5 - הפקודה האחרונה שהוקלדה */
 pid_t last_bg_pid   = -1;
 
-/* ─── feature 12: SIGCHLD handler ────────────────────────── */
+/* ────────────────── feature 12: SIGCHLD handler ────────────────── */\
+// שואלים את המערכת אם אחד מהילדים סיים
+// אם לא - אל תחגה תחזור מין (אם כן להחזיר את הפיד)
+// הלולאה היא כי יכול להיות שכמה ילדים סיימו באותו רגע 
 void sigchld_handler(int sig) {
     int status;
     pid_t pid;
@@ -26,14 +29,17 @@ void sigchld_handler(int sig) {
     }
 }
 
-/* ─── feature 10: SIGINT handler ─────────────────────────── */
+/* ────────────────── feature 10: SIGINT handler ────────────────── */
+// כשהמשתמש לוחץ קונטרול סי, מערכת ההפעלה שולחת סיגנל לתהליך.
+// במקום שהתהליך יסתיים (ברירת המחדל), אנחנו "תופסים" את הסיגנל ומדפיסים הודעה
 void sigint_handler(int sig) {
     printf("\nYou typed Control-C!\n");
     printf("%s: ", prompt);
     fflush(stdout);
 }
 
-/* ─── parse a single command string into argv ────────────── */
+/* ────────────────── parse a single command string into argv ────────────────── */
+// מקבלת מחרוזת פקודה ושוברת אותה לפי רווחים למערך argv
 int parse_argv(char *cmdstr, char **argv) {
     int i = 0;
     char *token = strtok(cmdstr, " ");
@@ -45,7 +51,8 @@ int parse_argv(char *cmdstr, char **argv) {
     return i;
 }
 
-/* ─── execute one segment (handles redirect flags) ───────── */
+/* ────────────────── execute one segment (handles redirect flags) ────────────────── */
+// מחליפה את קלט/פלט/שגיאה לפי הצורך ואז מריצה את הפקודה
 void exec_segment(char **argv, int in_fd, int out_fd, int err_fd) {
     if (in_fd != STDIN_FILENO) {
         dup2(in_fd,  STDIN_FILENO);
@@ -64,7 +71,9 @@ void exec_segment(char **argv, int in_fd, int out_fd, int err_fd) {
     exit(1);
 }
 
-/* ─── feature 11: pipeline ───────────────────────────────── */
+/* ────────────────── feature 11: pipeline ────────────────── */
+// מריצה שרשרת פקודות מחוברות ב-|
+// כל פקודה קוראת מהפקודה הקודמת וכותבת לבאה
 void run_pipeline(char *segments[], int nseg, int in_fd, int out_fd, int err_fd) {
     int i;
     int prev_read = in_fd;   /* read-end carried from previous pipe */
@@ -82,9 +91,9 @@ void run_pipeline(char *segments[], int nseg, int in_fd, int out_fd, int err_fd)
         int this_out;
 
         if (i < nseg - 1) {
-            /* not the last command → create a new pipe */
-            pipe(pipefd);
-            this_out = pipefd[1];   /* write end goes to child */
+            // not the last command → create a new pipe
+            pipe(pipefd); // יוצר pipe חדש לפקודה הבאה
+            this_out = pipefd[1];   //write end goes to child
         } else {
             /* last command → write to the final out_fd */
             this_out = out_fd;
@@ -93,14 +102,14 @@ void run_pipeline(char *segments[], int nseg, int in_fd, int out_fd, int err_fd)
         pid_t pid = fork();
         if (pid == 0) {
             /* child */
-            if (i < nseg - 1) close(pipefd[0]); /* child doesn't read this pipe */
+            if (i < nseg - 1) close(pipefd[0]); //child doesn't read this pipe
             exec_segment(argv, prev_read, this_out, err_fd);
         }
         /* parent */
-        if (prev_read != in_fd)   close(prev_read);  /* done with previous read-end */
+        if (prev_read != in_fd)   close(prev_read);  //done with previous read-end
         if (i < nseg - 1) {
-            close(pipefd[1]);        /* parent doesn't write */
-            prev_read = pipefd[0];   /* carry read-end to next iteration */
+            close(pipefd[1]);        //parent doesn't write
+            prev_read = pipefd[0];   // שומר את קצה הקריאה לפקודה הבאה
         }
     }
 
@@ -124,7 +133,7 @@ int main() {
     int  retid, status;
     char *argv[64];
 
-    /* register signal handlers */
+    // רושמים את הפונקציות שיטפלו בסיגנלים
     signal(SIGINT,  sigint_handler);   /* feature 10 */
     signal(SIGCHLD, sigchld_handler);  /* feature 12 */
 
@@ -132,12 +141,13 @@ int main() {
         printf("%s: ", prompt);
         fflush(stdout);
 
+        // קוראים שורה מהמשתמש
         if (fgets(command, sizeof(command), stdin) == NULL) {
             /* EOF (Ctrl-D) */
             printf("\n");
             break;
         }
-        command[strlen(command) - 1] = '\0';   /* strip newline */
+        command[strlen(command) - 1] = '\0';   // מוחקים את \n בסוף
 
         /* ── feature 5: up-arrow sends ESC [ A  (\x1B[A) ── */
         if (strcmp(command, "\x1B[A") == 0) {
@@ -145,7 +155,7 @@ int main() {
             printf("(repeat) %s\n", command);
         }
 
-        /* ── feature 4: !! ── */
+        // שומרים את הפקודה הנוכחית (לא שומרים את !! עצמו)
         if (strcmp(command, "!!") == 0) {
             if (last_cmd[0] == '\0') {
                 printf("No previous command.\n");
@@ -159,26 +169,25 @@ int main() {
         if (strcmp(command, "!!") != 0)
             strncpy(last_cmd, command, sizeof(last_cmd)-1);
 
-        /* ────────────────────────────────────────────────────
-           feature 11: check for pipe '|' BEFORE normal parse
-           ──────────────────────────────────────────────────── */
+        // feature 11: בודקים אם יש | לפני ניתוח רגיל
         if (strchr(command, '|') != NULL) {
             /* split on '|' */
             char pipe_buf[1024];
             strncpy(pipe_buf, command, sizeof(pipe_buf)-1);
             pipe_buf[sizeof(pipe_buf)-1] = '\0';
 
+            // שוברים את הפקודה לחלקים לפי |
             char *segments[32];
             int   nseg = 0;
             char *seg  = strtok(pipe_buf, "|");
             while (seg != NULL) {
                 /* trim leading space */
-                while (*seg == ' ') seg++;
+                while (*seg == ' ') seg++; // מדלגים על רווחים בהתחלה
                 segments[nseg++] = seg;
                 seg = strtok(NULL, "|");
             }
 
-            /* check for output redirection on last segment */
+            // בודקים אם יש ניתוב פלט בפקודה האחרונה
             int  final_out = STDOUT_FILENO;
             int  final_err = STDERR_FILENO;
             char *last_seg = segments[nseg - 1];
@@ -203,10 +212,11 @@ int main() {
             continue;
         }
 
-        /* ─── normal (non-pipe) command parse ─────────────── */
+        /* ─────────────── normal (non-pipe) command parse ─────────────── */
         char parse_buf[1024];
         strncpy(parse_buf, command, sizeof(parse_buf)-1);
 
+        // שוברים את הפקודה למילים לפי רווחים
         i = 0;
         token = strtok(parse_buf, " ");
         while (token != NULL) {
@@ -217,7 +227,7 @@ int main() {
 
         if (argv[0] == NULL) continue;
 
-        /* ── background ── */
+        /* ── בודקים אם הפקודה מסתיימת ב-& (רקע) ── */
         if (i > 0 && strcmp(argv[i-1], "&") == 0) {
             amper = 1;
             argv[--i] = NULL;
@@ -265,12 +275,12 @@ int main() {
            Built-in commands (executed BEFORE fork)
            ════════════════════════════════════════════════════ */
 
-        /* feature 6: quit */
+        // feature 6: יציאה מה-shell
         if (strcmp(argv[0], "quit") == 0) {
             exit(0);
         }
 
-        /* feature 1: prompt = newprompt */
+        // feature 1: שינוי הסמן
         if (strcmp(argv[0], "prompt") == 0 &&
             argv[1] != NULL && strcmp(argv[1], "=") == 0 &&
             argv[2] != NULL) {
@@ -278,13 +288,13 @@ int main() {
             continue;
         }
 
-        /* feature 2: status */
+        // feature 2: הדפסת קוד היציאה האחרון
         if (strcmp(argv[0], "status") == 0) {
             printf("%d\n", last_status);
             continue;
         }
 
-        /* feature 3: cd */
+        // feature 3: שינוי תיקייה (חייב להיות בהורה, לא בילד)
         if (strcmp(argv[0], "cd") == 0) {
             char *dir = argv[1] ? argv[1] : getenv("HOME");
             if (chdir(dir) != 0)
@@ -295,9 +305,9 @@ int main() {
         /* ════════════════════════════════════════════════════
            Fork and exec
            ════════════════════════════════════════════════════ */
-        pid_t pid = fork();
+        pid_t pid = fork(); // יוצר תהליך ילד זהה
         if (pid == 0) {
-            /* ── stdout redirect ── */
+            // כאן אנחנו בתהליך הילד - מגדירים ניתובים ומריצים
             if (redirect) {
                 fd = creat(outfile, 0660);
                 dup2(fd, STDOUT_FILENO);
@@ -323,20 +333,20 @@ int main() {
                 close(fd);
             }
 
-            /* restore default SIGINT in child so it can be killed */
+            // הילד יכול להיסגר עם Ctrl-C (מחזירים ברירת מחדל)
             signal(SIGINT, SIG_DFL);
 
-            execvp(argv[0], argv);
-            perror(argv[0]);
+            execvp(argv[0], argv); // מריצים את הפקודה - מחליף את קוד הילד
+            perror(argv[0]);  // מגיעים לכאן רק אם execvp נכשל
             exit(1);
         }
 
-        /* parent */
+        // ההורה ממשיך מכאן
         if (amper == 0) {
-            retid = waitpid(pid, &status, 0);
-            last_status = WEXITSTATUS(status);
+            retid = waitpid(pid, &status, 0); // מחכה שהילד יסיים
+            last_status = WEXITSTATUS(status); // שומר את קוד היציאה
         } else {
-            last_bg_pid = pid;
+            last_bg_pid = pid; // רקע - SIGCHLD handler יטפל בסיום
             /* background: SIGCHLD handler will reap */
         }
     }
